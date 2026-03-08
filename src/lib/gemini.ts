@@ -1,10 +1,8 @@
-import OpenAI from 'openai';
-import { TaggedFile, FocusArea, Question, Difficulty } from '@/types';
+import { GoogleGenAI } from '@google/genai';
+import { TaggedFile, FocusArea, Question } from '@/types';
 
-// Initialize OpenAI with one of the provided free keys
-const openai = new OpenAI({
-    apiKey: 'sk-1234567890abcdef1234567890abcdef12345678',
-});
+// Initialize Gemini using the API key from environment variables
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 /**
  * Generates interview questions from tagged code files.
@@ -45,12 +43,12 @@ Respond ONLY with valid JSON (no markdown, no explanation), in this exact format
   }
 ]`;
 
-    const response = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: prompt,
     });
 
-    const text = response.choices[0]?.message?.content ?? '';
+    const text = response.text ?? '';
     // Strip any markdown code fences the model might add
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const questions = JSON.parse(cleaned) as Question[];
@@ -86,12 +84,12 @@ Respond ONLY with valid JSON (no markdown, no explanation):
   "aiAnswer": "<a strong 3-5 sentence model answer for this question>"
 }`;
 
-    const response = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: prompt,
     });
 
-    const text = response.choices[0]?.message?.content ?? '';
+    const text = response.text ?? '';
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     return JSON.parse(cleaned);
 }
