@@ -1,8 +1,18 @@
-import { GoogleGenAI } from '@google/genai';
+/**
+ * AI helpers — powered by OpenRouter (free tier, no credit card needed).
+ * Uses the OpenAI-compatible SDK since OpenRouter supports that interface.
+ * Add OPENROUTER_API_KEY to your .env file to use this.
+ */
+
+import OpenAI from 'openai';
 import { TaggedFile, FocusArea, Question } from '@/types';
 
-// Initialize Gemini using the API key from environment variables
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+const client = new OpenAI({
+    baseURL: 'https://openrouter.ai/api/v1',
+    apiKey: process.env.OPENROUTER_API_KEY!,
+});
+
+const MODEL = 'meta-llama/llama-3.3-8b-instruct:free';
 
 /**
  * Generates interview questions from tagged code files.
@@ -13,14 +23,13 @@ export async function generateQuestions(
     focusAreas: FocusArea[],
     repoName: string
 ): Promise<Question[]> {
-    // Build the file context block for the prompt
     const fileContext = taggedFiles
         .filter((f) => f.content)
         .map((f) => `### File: ${f.path} (tagged as: ${f.tag})\n\`\`\`\n${f.content}\n\`\`\``)
         .join('\n\n');
 
     const prompt = `You are a senior software engineer conducting a technical interview.
-The candidate has shared their GitHub project "${repoName}". 
+The candidate has shared their GitHub project "${repoName}".
 Study the code below and generate exactly 6 interview questions.
 
 Focus areas the candidate selected: ${focusAreas.join(', ')}
@@ -43,24 +52,23 @@ Respond ONLY with valid JSON (no markdown, no explanation), in this exact format
   }
 ]`;
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash',
-        contents: prompt,
+    const response = await client.chat.completions.create({
+        model: MODEL,
+        messages: [{ role: 'user', content: prompt }],
     });
 
-    const text = response.text ?? '';
-    // Strip any markdown code fences the model might add
+    const text = response.choices[0]?.message?.content ?? '';
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
 
     try {
         const questions = JSON.parse(cleaned) as Question[];
         if (!Array.isArray(questions) || questions.length === 0) {
-            throw new Error('Gemini returned an empty or invalid questions array');
+            throw new Error('Model returned an empty or invalid questions array');
         }
         return questions;
     } catch {
-        console.error('Failed to parse Gemini response as JSON:', cleaned);
-        throw new Error('Gemini returned malformed JSON. Raw response: ' + cleaned.slice(0, 200));
+        console.error('Failed to parse response as JSON:', cleaned);
+        throw new Error('Model returned malformed JSON. Raw: ' + cleaned.slice(0, 200));
     }
 }
 
@@ -93,22 +101,22 @@ Respond ONLY with valid JSON (no markdown, no explanation):
   "aiAnswer": "<a strong 3-5 sentence model answer for this question>"
 }`;
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash',
-        contents: prompt,
+    const response = await client.chat.completions.create({
+        model: MODEL,
+        messages: [{ role: 'user', content: prompt }],
     });
 
-    const text = response.text ?? '';
+    const text = response.choices[0]?.message?.content ?? '';
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
 
     try {
         const result = JSON.parse(cleaned);
         if (typeof result.score !== 'number' || !result.feedback || !result.aiAnswer) {
-            throw new Error('Gemini returned incomplete evaluation fields');
+            throw new Error('Model returned incomplete evaluation fields');
         }
         return result;
     } catch {
-        console.error('Failed to parse Gemini evaluation response:', cleaned);
-        throw new Error('Gemini returned malformed JSON. Raw response: ' + cleaned.slice(0, 200));
+        console.error('Failed to parse evaluation response:', cleaned);
+        throw new Error('Model returned malformed JSON. Raw: ' + cleaned.slice(0, 200));
     }
 }
