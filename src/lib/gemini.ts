@@ -3,7 +3,7 @@ import { TaggedFile, FocusArea, Question, Difficulty } from '@/types';
 
 // Initialize OpenAI with one of the provided free keys
 const openai = new OpenAI({
-    apiKey: 'sk-abcdef1234567890abcdef1234567890abcdef12',
+    apiKey: 'sk-1234567890abcdef1234567890abcdef12345678',
 });
 
 /**
