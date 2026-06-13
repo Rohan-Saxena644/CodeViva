@@ -278,6 +278,12 @@ Respond ONLY with valid JSON in this exact format:
             const response = await client.chat.completions.create({
                 model: MODEL,
                 max_tokens: 8000,
+                // Gemini 2.5 models "think" by default via the OpenAI-compat endpoint,
+                // consuming output tokens on hidden reasoning before writing the actual
+                // response. With a fixed max_tokens budget that can leave 0 tokens for
+                // the JSON array itself (empty content -> "No JSON array found").
+                // 'none' disables thinking for 2.5 models so all tokens go to the answer.
+                reasoning_effort: 'none',
                 messages: [{ role: 'user', content: prompt }],
             });
 
@@ -287,7 +293,10 @@ Respond ONLY with valid JSON in this exact format:
             // any preamble/postamble the model adds.
             const jsonMatch = rawText.match(/\[[\s\S]*\]/);
             if (!jsonMatch) {
-                throw new Error('No JSON array found in model response');
+                const finishReason = response.choices[0]?.finish_reason ?? 'unknown';
+                throw new Error(
+                    `No JSON array found in model response (content length: ${rawText.length}, finish_reason: ${finishReason})`
+                );
             }
             const cleaned = jsonMatch[0].trim();
 
@@ -409,6 +418,7 @@ Respond ONLY with valid JSON:
     const response = await client.chat.completions.create({
         model: MODEL,
         max_tokens: 1024,
+        reasoning_effort: 'none',
         messages: [{ role: 'user', content: prompt }],
     });
 
