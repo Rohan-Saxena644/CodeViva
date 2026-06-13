@@ -20,6 +20,20 @@ function getClient() {
         );
     }
 
+    const trimmedKey = apiKey.trim();
+
+    // OpenRouter keys always start with "sk-or-". The most common misconfiguration
+    // is pasting a Google AI Studio / Gemini key (starts with "AIza...") here, since
+    // the model id contains "gemini". That key is valid for Google's API but is
+    // unknown to OpenRouter, which responds with "401 User not found".
+    if (!trimmedKey.startsWith('sk-or-')) {
+        console.error(
+            `OPENROUTER_API_KEY does not look like an OpenRouter key (expected it to start with "sk-or-"). ` +
+                `Got a value starting with "${trimmedKey.slice(0, 6)}...". ` +
+                `Generate a real key at https://openrouter.ai/keys — a Google/Gemini AI Studio key will not work here.`
+        );
+    }
+
     return new OpenAI({
         baseURL: 'https://openrouter.ai/api/v1',
         apiKey: apiKey.trim(),
@@ -310,6 +324,21 @@ Respond ONLY with valid JSON in this exact format:
             if (rawText) {
                 console.error('Raw model output (first 400 chars):', rawText.slice(0, 400));
             }
+
+            // 401/403 from OpenRouter means the API key itself was rejected — this is
+            // not transient, so retrying won't help and just doubles the wait before
+            // the user sees an error. Surface a clear, actionable message instead of
+            // the misleading "Failed after 2 attempts. Last error: 401 User not found.".
+            const status = (err as { status?: number } | undefined)?.status;
+            if (status === 401 || status === 403) {
+                throw new Error(
+                    `OpenRouter rejected the request (HTTP ${status}: ${lastError.message}). ` +
+                        'OPENROUTER_API_KEY is missing, invalid, or revoked on OpenRouter\'s side — this is not related to ' +
+                        'app login or guest mode. Get/verify a key at https://openrouter.ai/keys (it should start with ' +
+                        '"sk-or-"); a Google AI Studio / Gemini key will not work here.'
+                );
+            }
+
             // Small delay before retry so we don't hammer the API immediately.
             if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1000));
         }
