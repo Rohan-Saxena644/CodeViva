@@ -22,16 +22,21 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     );
 }
 
-/**
- * NextAuth configuration.
- * Supports GitHub and Google when their env vars are configured.
- * The user's provider id, name, email, and avatar are stored in the session.
- */
+// One week, in seconds. Used for both the session cookie lifetime and the JWT
+// expiry below.
+const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
+
+
 export const authOptions: AuthOptions = {
     providers,
     secret: process.env.NEXTAUTH_SECRET,
     session: {
         strategy: 'jwt',
+        maxAge: SESSION_MAX_AGE,
+        updateAge: 60 * 60 * 24, // refresh the rolling window at most once per day
+    },
+    jwt: {
+        maxAge: SESSION_MAX_AGE,
     },
     callbacks: {
         async jwt({ token }) {
