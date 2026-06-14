@@ -1,9 +1,11 @@
 'use client';
 
+import { Suspense } from 'react';
 import Link from 'next/link';
 import { signIn, useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, BookOpen, Chrome, Code2, GitBranch, Github, MessageSquare, Target, Zap } from 'lucide-react';
+import AuthErrorBanner from '@/components/AuthErrorBanner';
 
 const features = [
     {
@@ -90,6 +92,10 @@ export default function LandingPage() {
                     >
                         CodeViva
                     </div>
+
+                    <Suspense fallback={null}>
+                        <AuthErrorBanner />
+                    </Suspense>
 
                     <div
                         style={{
