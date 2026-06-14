@@ -44,6 +44,65 @@ function getClient() {
     });
 }
 
+/**
+ * Parse JSON that may contain common LLM formatting mistakes:
+ * - Trailing commas before `}` or `]` (the most common one — e.g. `"x": 1,\n}`,
+ *   which causes V8's "Expected double-quoted property name in JSON" error).
+ * - Smart/curly quotes used instead of straight quotes around string values.
+ * - Raw control characters (literal newlines/tabs) inside string values, which
+ *   are technically invalid JSON.
+ *
+ * Tries a plain JSON.parse first (fast path for well-formed output), then
+ * progressively applies fixes and retries. Throws the *original* parse error
+ * if nothing works, so error messages stay meaningful.
+ */
+function parseJsonLenient<T>(text: string): T {
+    try {
+        return JSON.parse(text) as T;
+    } catch (originalError) {
+        let repaired = text;
+
+        // Remove trailing commas before a closing } or ], possibly across whitespace/newlines.
+        repaired = repaired.replace(/,(\s*[}\]])/g, '$1');
+
+        // Replace curly/smart quotes with straight quotes (common when models
+        // "stylize" text inside JSON string values).
+        repaired = repaired.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'");
+
+        try {
+            return JSON.parse(repaired) as T;
+        } catch {
+            // Last resort: escape raw newlines/tabs/carriage returns that appear
+            // inside string values (between quotes) — these are invalid JSON but
+            // commonly produced by models writing multi-line explanations.
+            let escaped = '';
+            let inString = false;
+            let prevChar = '';
+            for (const char of repaired) {
+                if (char === '"' && prevChar !== '\\') {
+                    inString = !inString;
+                    escaped += char;
+                } else if (inString && char === '\n') {
+                    escaped += '\\n';
+                } else if (inString && char === '\r') {
+                    escaped += '\\r';
+                } else if (inString && char === '\t') {
+                    escaped += '\\t';
+                } else {
+                    escaped += char;
+                }
+                prevChar = char;
+            }
+
+            try {
+                return JSON.parse(escaped) as T;
+            } catch {
+                throw originalError instanceof Error ? originalError : new Error(String(originalError));
+            }
+        }
+    }
+}
+
 function sanitizeQuestion(question: Question, index: number): Question {
     if (question.type === 'descriptive' || question.type === 'short-answer') {
         return {
@@ -166,6 +225,7 @@ Rules:
 - The best option should still encourage interview-style reasoning, not pure memorization.
 - For the 2 descriptive questions: options must be an empty array and correctAnswerIndex must be omitted.
 - Explanations should teach the candidate how to answer the same idea in a viva. For descriptive questions, explanation should act like a strong model answer.
+- Output strict JSON only: no trailing commas after the last property in an object or the last item in an array, no comments, no markdown code fences.
 
 Respond ONLY with valid JSON in this exact format:
 [
@@ -231,6 +291,7 @@ Examples of the kind of systems scenarios you may use:
 - fanout-on-write vs fanout-on-read for notifications or feeds
 - search freshness, indexing delays, ranking tradeoffs
 - data consistency, partitioning, idempotency, rollback or replay behavior
+- Output strict JSON only: no trailing commas after the last property in an object or the last item in an array, no comments, no markdown code fences.
 
 Respond ONLY with valid JSON in this exact format:
 [
@@ -300,7 +361,7 @@ Respond ONLY with valid JSON in this exact format:
             }
             const cleaned = jsonMatch[0].trim();
 
-            const parsed = JSON.parse(cleaned) as Question[];
+            const parsed = parseJsonLenient<Question[]>(cleaned);
 
             if (!Array.isArray(parsed) || parsed.length < 10) {
                 throw new Error(`Model returned too few questions (${parsed.length})`);
@@ -433,12 +494,12 @@ Respond ONLY with valid JSON:
     const cleaned = jsonMatch[0].trim();
 
     try {
-        const parsed = JSON.parse(cleaned) as {
+        const parsed = parseJsonLenient<{
             score: number;
             feedback: string;
             aiAnswer: string;
             isCorrect?: boolean;
-        };
+        }>(cleaned);
 
         return {
             score: parsed.score,
