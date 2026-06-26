@@ -10,9 +10,14 @@ import {
     FocusArea,
     InterviewStyle,
     InterviewTrack,
+    Question,
     SystemTopic,
     TaggedFile,
 } from '@/types';
+
+export const maxDuration = 120;
+
+const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL;
 
 async function buildFilesWithContent(
     repoOwner: string,
@@ -35,9 +40,65 @@ function sanitizeResumeContext(resumeContext: unknown) {
     return typeof resumeContext === 'string' ? resumeContext.trim().slice(0, 4000) : '';
 }
 
-// POST /api/ai/generate
-// Authenticated: { sessionId }
-// Guest: { repoOwner, repoName, taggedFiles, focusAreas }
+async function generateViaPython(payload: object): Promise<Question[]> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 110_000);
+
+    try {
+        const res = await fetch(`${PYTHON_SERVICE_URL}/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+        });
+
+        if (!res.ok) {
+            const err = await res.text().catch(() => `HTTP ${res.status}`);
+            throw new Error(`Python service returned ${res.status}: ${err.slice(0, 200)}`);
+        }
+
+        const data = await res.json() as { questions?: Question[]; error?: string };
+
+        if (data.error) throw new Error(`Python service error: ${data.error}`);
+        if (!Array.isArray(data.questions) || data.questions.length === 0) {
+            throw new Error('Python service returned no questions');
+        }
+
+        return data.questions;
+    } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
+            throw new Error('Question generation timed out (>110s). Try selecting fewer files or a simpler repo.');
+        }
+        throw err;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+async function generateWithFallback(
+    payload: object,
+    taggedFiles: TaggedFile[],
+    focusAreas: FocusArea[],
+    repoName: string,
+    options: {
+        interviewTrack?: InterviewTrack;
+        systemTopics?: SystemTopic[];
+        interviewStyle?: InterviewStyle;
+        difficultyPreset?: DifficultyPreset;
+        resumeContext?: string;
+    }
+): Promise<Question[]> {
+    if (PYTHON_SERVICE_URL) {
+        try {
+            return await generateViaPython(payload);
+        } catch (pythonErr: unknown) {
+            const msg = pythonErr instanceof Error ? pythonErr.message : String(pythonErr);
+            console.warn('Python service failed, falling back to Gemini direct:', msg);
+        }
+    }
+    return generateQuestions(taggedFiles, focusAreas, repoName, options);
+}
+
 export async function POST(req: NextRequest) {
     try {
         const authSession = await getServerSession(authOptions);
@@ -60,17 +121,31 @@ export async function POST(req: NextRequest) {
             const filesWithContent = isSystemsTrack
                 ? []
                 : await buildFilesWithContent(doc.repoOwner, doc.repoName, doc.taggedFiles);
-            const questions = await generateQuestions(
+
+            const options = {
+                interviewTrack: doc.interviewTrack as InterviewTrack | undefined,
+                systemTopics: doc.systemTopics as SystemTopic[] | undefined,
+                interviewStyle: doc.interviewStyle as InterviewStyle | undefined,
+                difficultyPreset: doc.difficultyPreset as DifficultyPreset | undefined,
+                resumeContext: sanitizeResumeContext(doc.resumeContext),
+            };
+
+            const questions = await generateWithFallback(
+                {
+                    repo_owner: doc.repoOwner,
+                    repo_name: doc.repoName,
+                    tagged_files: filesWithContent,
+                    focus_areas: doc.focusAreas,
+                    interview_track: doc.interviewTrack ?? 'repo-viva',
+                    interview_style: doc.interviewStyle ?? 'practice',
+                    difficulty_preset: doc.difficultyPreset ?? 'balanced',
+                    system_topics: doc.systemTopics ?? [],
+                    resume_context: sanitizeResumeContext(doc.resumeContext),
+                },
                 filesWithContent,
                 doc.focusAreas as FocusArea[],
                 doc.repoName,
-                {
-                    interviewTrack: doc.interviewTrack as InterviewTrack | undefined,
-                    systemTopics: doc.systemTopics as SystemTopic[] | undefined,
-                    interviewStyle: doc.interviewStyle as InterviewStyle | undefined,
-                    difficultyPreset: doc.difficultyPreset as DifficultyPreset | undefined,
-                    resumeContext: sanitizeResumeContext(doc.resumeContext),
-                }
+                options
             );
 
             doc.questions = questions as typeof doc.questions;
@@ -100,22 +175,39 @@ export async function POST(req: NextRequest) {
             interviewTrack === 'systems'
                 ? []
                 : await buildFilesWithContent(repoOwner, repoName, (taggedFiles as TaggedFile[]) ?? []);
-        const questions = await generateQuestions(filesWithContent, focusAreas as FocusArea[], repoName, {
+
+        const options = {
             interviewTrack: interviewTrack as InterviewTrack | undefined,
             systemTopics: systemTopics as SystemTopic[] | undefined,
             interviewStyle: interviewStyle as InterviewStyle | undefined,
             difficultyPreset: difficultyPreset as DifficultyPreset | undefined,
             resumeContext: sanitizeResumeContext(resumeContext),
-        });
+        };
 
-        return NextResponse.json({
-            questions,
-            taggedFiles: filesWithContent,
-        });
-    } catch (error: any) {
+        const questions = await generateWithFallback(
+            {
+                repo_owner: repoOwner,
+                repo_name: repoName,
+                tagged_files: filesWithContent,
+                focus_areas: focusAreas,
+                interview_track: interviewTrack ?? 'repo-viva',
+                interview_style: interviewStyle ?? 'practice',
+                difficulty_preset: difficultyPreset ?? 'balanced',
+                system_topics: systemTopics ?? [],
+                resume_context: sanitizeResumeContext(resumeContext),
+            },
+            filesWithContent,
+            focusAreas as FocusArea[],
+            repoName,
+            options
+        );
+
+        return NextResponse.json({ questions, taggedFiles: filesWithContent });
+
+    } catch (error: unknown) {
         console.error('Error generating questions:', error);
         return NextResponse.json(
-            { error: error.message || 'Internal Server Error' },
+            { error: error instanceof Error ? error.message : 'Internal Server Error' },
             { status: 500 }
         );
     }
